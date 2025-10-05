@@ -149,25 +149,86 @@ class WatermarkSettings(QWidget):
         common_layout.addLayout(opacity_layout)
         
         # 位置设置
-        position_layout = QHBoxLayout()
+        position_layout = QVBoxLayout()
         position_label = QLabel('位置：')
+        
+        # 九宫格位置选择
+        grid_layout = QHBoxLayout()
         self.position_combo = QComboBox()
-        self.position_combo.addItems(['左上角', '右上角', '左下角', '右下角', '中心'])
+        self.position_combo.addItems([
+            '左上角', '上中', '右上角',
+            '左中', '中心', '右中', 
+            '左下角', '下中', '右下角'
+        ])
         self.position_combo.setCurrentText('中心')
         self.position_combo.currentTextChanged.connect(self.onSettingChanged)
+        
+        # 添加九宫格快速选择按钮
+        from PyQt6.QtWidgets import QGridLayout, QFrame
+        grid_frame = QFrame()
+        grid_frame.setFrameStyle(QFrame.Shape.Box)
+        grid_frame.setMaximumSize(120, 90)
+        
+        self.grid_buttons_layout = QGridLayout(grid_frame)
+        self.grid_buttons_layout.setSpacing(2)
+        
+        # 创建九宫格按钮
+        positions = [
+            ('左上角', 0, 0), ('上中', 0, 1), ('右上角', 0, 2),
+            ('左中', 1, 0), ('中心', 1, 1), ('右中', 1, 2),
+            ('左下角', 2, 0), ('下中', 2, 1), ('右下角', 2, 2)
+        ]
+        
+        self.grid_buttons = {}
+        for pos_name, row, col in positions:
+            btn = QPushButton()
+            btn.setFixedSize(35, 25)
+            btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #f0f0f0;
+                    border: 1px solid #ccc;
+                    border-radius: 3px;
+                }
+                QPushButton:hover {
+                    background-color: #e0e0e0;
+                }
+                QPushButton:pressed {
+                    background-color: #0078d4;
+                }
+            """)
+            btn.clicked.connect(lambda checked, pos=pos_name: self.onGridPositionClicked(pos))
+            self.grid_buttons_layout.addWidget(btn, row, col)
+            self.grid_buttons[pos_name] = btn
+        
+        grid_layout.addWidget(self.position_combo)
+        grid_layout.addWidget(grid_frame)
+        
         position_layout.addWidget(position_label)
-        position_layout.addWidget(self.position_combo)
+        position_layout.addLayout(grid_layout)
         common_layout.addLayout(position_layout)
         
         # 旋转设置
-        rotation_layout = QHBoxLayout()
+        rotation_layout = QVBoxLayout()
         rotation_label = QLabel('旋转：')
+        
+        # 旋转滑块
+        rotation_slider_layout = QHBoxLayout()
+        self.rotation_slider = QSlider(Qt.Orientation.Horizontal)
+        self.rotation_slider.setRange(0, 359)
+        self.rotation_slider.setValue(0)
+        self.rotation_slider.valueChanged.connect(self.onRotationSliderChanged)
+        
+        # 旋转输入框
         self.rotation_spin = QSpinBox()
         self.rotation_spin.setRange(0, 359)
         self.rotation_spin.setSuffix('°')
-        self.rotation_spin.valueChanged.connect(self.onSettingChanged)
+        self.rotation_spin.valueChanged.connect(self.onRotationSpinChanged)
+        
+        rotation_slider_layout.addWidget(self.rotation_slider)
+        rotation_slider_layout.addWidget(self.rotation_spin)
+        
         rotation_layout.addWidget(rotation_label)
-        rotation_layout.addWidget(self.rotation_spin)
+        rotation_layout.addLayout(rotation_slider_layout)
         common_layout.addLayout(rotation_layout)
         
         common_group.setLayout(common_layout)
@@ -189,7 +250,9 @@ class WatermarkSettings(QWidget):
         try:
             print(f"文本输入: {text}")
             self.current_settings['text'] = text
-            self.settingsChanged.emit(self.current_settings)
+            # 只有当文本不为空时才发送信号，避免频繁更新
+            if text.strip():
+                self.settingsChanged.emit(self.current_settings)
         except Exception as e:
             print(f"处理文本输入时出错: {e}")
             # 发生错误时重置文本
@@ -226,6 +289,66 @@ class WatermarkSettings(QWidget):
         self.current_settings['opacity'] = value
         self.settingsChanged.emit(self.current_settings)
     
+    def onRotationSliderChanged(self, value):
+        """处理旋转滑块变化"""
+        # 同步更新输入框
+        self.rotation_spin.blockSignals(True)
+        self.rotation_spin.setValue(value)
+        self.rotation_spin.blockSignals(False)
+        
+        # 更新设置
+        self.current_settings['rotation'] = value
+        self.settingsChanged.emit(self.current_settings)
+    
+    def onRotationSpinChanged(self, value):
+        """处理旋转输入框变化"""
+        # 同步更新滑块
+        self.rotation_slider.blockSignals(True)
+        self.rotation_slider.setValue(value)
+        self.rotation_slider.blockSignals(False)
+        
+        # 更新设置
+        self.current_settings['rotation'] = value
+        self.settingsChanged.emit(self.current_settings)
+    
+    def onGridPositionClicked(self, position):
+        """处理九宫格位置按钮点击"""
+        # 更新下拉框选择
+        self.position_combo.blockSignals(True)
+        self.position_combo.setCurrentText(position)
+        self.position_combo.blockSignals(False)
+        
+        # 更新按钮样式
+        for pos_name, btn in self.grid_buttons.items():
+            if pos_name == position:
+                btn.setStyleSheet("""
+                    QPushButton {
+                        background-color: #0078d4;
+                        border: 1px solid #005a9e;
+                        border-radius: 3px;
+                        color: white;
+                    }
+                """)
+            else:
+                btn.setStyleSheet("""
+                    QPushButton {
+                        background-color: #f0f0f0;
+                        border: 1px solid #ccc;
+                        border-radius: 3px;
+                    }
+                    QPushButton:hover {
+                        background-color: #e0e0e0;
+                    }
+                    QPushButton:pressed {
+                        background-color: #0078d4;
+                    }
+                """)
+        
+        # 更新设置
+        self.current_settings['position'] = position
+        self.current_settings['position_custom'] = False
+        self.settingsChanged.emit(self.current_settings)
+     
     def showColorDialog(self):
         """显示颜色选择对话框"""
         color = QColorDialog.getColor(QColor(self.current_settings['color']))

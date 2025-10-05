@@ -1,6 +1,6 @@
 from PyQt6.QtWidgets import QLabel
-from PyQt6.QtCore import Qt, QPoint
-from PyQt6.QtGui import QPixmap, QPainter, QFont, QColor, QImage
+from PyQt6.QtCore import Qt, QPoint, QRect
+from PyQt6.QtGui import QPixmap, QPainter, QFont, QColor, QImage, QCursor, QPen
 from PIL import Image, ImageQt
 import os
 
@@ -19,6 +19,12 @@ class WatermarkPreview(QLabel):
         self.drag_start = QPoint()
         self.watermark_pos = QPoint()
         self.scale_factor = 1.0
+        self.updating_preview = False  # 防止重复更新的标志
+        self.watermark_bounds = QRect()  # 水印边界
+        self.hover_watermark = False  # 鼠标是否悬停在水印上
+        
+        # 启用鼠标跟踪
+        self.setMouseTracking(True)
     
     def setImage(self, image_path):
         """设置预览图片
@@ -48,6 +54,14 @@ class WatermarkPreview(QLabel):
             self.scale_factor = 1.0
         
         self.setPixmap(scaled_pixmap)
+        
+        # 如果已有水印设置，重新计算位置
+        if self.watermark_settings:
+            if not self.watermark_settings.get('position_custom'):
+                self.watermark_pos = self.getPresetPosition(self.watermark_settings.get('position', '中心'))
+            elif self.watermark_pos == QPoint():
+                self.watermark_pos = self.getPresetPosition('中心')
+        
         self.updatePreview()
     
     def setWatermarkSettings(self, settings):
@@ -60,31 +74,197 @@ class WatermarkPreview(QLabel):
         if not settings.get('position_custom'):
             # 如果不是自定义位置，使用预设位置
             self.watermark_pos = self.getPresetPosition(settings.get('position', '中心'))
+        else:
+            # 如果是自定义位置但watermark_pos还是默认值，设置为中心
+            if self.watermark_pos == QPoint():
+                self.watermark_pos = self.getPresetPosition('中心')
         self.updatePreview()
     
     def updatePreview(self):
         """更新预览显示"""
+        if not self.original_image or not self.watermark_settings or self.updating_preview:
+            return
+        
+        # 设置更新标志，防止重复调用
+        self.updating_preview = True
+        
+        try:
+            # 获取当前显示的缩放图片尺寸
+            current_size = self.size()
+            
+            # 重新缩放原始图片
+            scaled_image = self.original_image.scaled(
+                current_size,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation
+            )
+            
+            # 创建工作画布，使用缩放后的图片尺寸
+            preview = QPixmap(scaled_image.size())
+            preview.fill(Qt.GlobalColor.transparent)
+            
+            # 绘制原图
+            painter = QPainter(preview)
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+            painter.drawPixmap(0, 0, scaled_image)
+            
+            # 绘制水印
+            if self.watermark_settings.get('type') == '文本水印':
+                self.drawTextWatermark(painter)
+            else:
+                self.drawImageWatermark(painter)
+            
+            # 如果正在拖拽或悬停，绘制水印边界
+            if self.dragging or self.hover_watermark:
+                self.drawWatermarkBounds(painter)
+            
+            painter.end()
+            self.setPixmap(preview)
+            
+            # 计算水印边界
+            self.calculateWatermarkBounds()
+        finally:
+            # 重置更新标志
+            self.updating_preview = False
+    
+    def updateDragPreview(self):
+        """拖动时的轻量级预览更新"""
         if not self.original_image or not self.watermark_settings:
             return
         
+        # 获取当前显示的缩放图片尺寸
+        current_size = self.size()
+        
+        # 重新缩放原始图片
+        scaled_image = self.original_image.scaled(
+            current_size,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation
+        )
+        
         # 创建工作画布
-        preview = QPixmap(self.pixmap().size())
+        preview = QPixmap(scaled_image.size())
         preview.fill(Qt.GlobalColor.transparent)
         
         # 绘制原图
         painter = QPainter(preview)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-        painter.drawPixmap(0, 0, self.pixmap())
+        painter.drawPixmap(0, 0, scaled_image)
         
-        # 绘制水印
+        # 只绘制当前水印
         if self.watermark_settings.get('type') == '文本水印':
             self.drawTextWatermark(painter)
         else:
             self.drawImageWatermark(painter)
         
+        # 绘制拖动边界
+        self.drawWatermarkBounds(painter)
+        
         painter.end()
         self.setPixmap(preview)
+        
+        # 更新水印边界
+        self.calculateWatermarkBounds()
     
+    def paintEvent(self, event):
+        """重写paintEvent以处理拖拽时的实时绘制"""
+        # 始终使用默认的paintEvent，避免无限循环
+        super().paintEvent(event)
+    
+    def calculateWatermarkBounds(self):
+        """计算水印边界"""
+        if not self.watermark_settings:
+            return
+        
+        if self.watermark_settings.get('type') == '文本水印':
+            text = self.watermark_settings.get('text', '')
+            if not text:
+                return
+            
+            # 创建临时画笔计算文本尺寸
+            temp_pixmap = QPixmap(1, 1)
+            temp_painter = QPainter(temp_pixmap)
+            
+            # 设置字体
+            font = QFont()
+            font_settings = self.watermark_settings.get('font', {})
+            font_size = max(1, int(font_settings.get('size', 40) * self.scale_factor))
+            font.setPointSize(font_size)
+            temp_painter.setFont(font)
+            
+            # 计算文本尺寸
+            fm = temp_painter.fontMetrics()
+            text_width = fm.horizontalAdvance(text)
+            text_height = fm.height()
+            
+            temp_painter.end()
+            
+            # 设置边界（考虑旋转）
+            padding = 10
+            self.watermark_bounds = QRect(
+                self.watermark_pos.x() - text_width//2 - padding,
+                self.watermark_pos.y() - text_height//2 - padding,
+                text_width + 2*padding,
+                text_height + 2*padding
+            )
+        else:
+            # 图片水印边界计算
+            image_path = self.watermark_settings.get('image_path')
+            if image_path and os.path.exists(image_path):
+                watermark = QPixmap(image_path)
+                scale = self.watermark_settings.get('scale', 100) / 100 * self.scale_factor
+                scaled_width = int(watermark.width() * scale)
+                scaled_height = int(watermark.height() * scale)
+                
+                padding = 10
+                self.watermark_bounds = QRect(
+                    self.watermark_pos.x() - scaled_width//2 - padding,
+                    self.watermark_pos.y() - scaled_height//2 - padding,
+                    scaled_width + 2*padding,
+                    scaled_height + 2*padding
+                )
+    
+    def drawWatermarkBounds(self, painter):
+        """绘制水印边界框"""
+        if self.watermark_bounds.isEmpty():
+            return
+        
+        # 保存当前状态
+        painter.save()
+        
+        # 设置边界框样式
+        pen = QPen(QColor(0, 120, 255), 2)  # 蓝色边框
+        pen.setStyle(Qt.PenStyle.DashLine)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        
+        # 绘制边界框
+        painter.drawRect(self.watermark_bounds)
+        
+        # 绘制控制点（四个角）
+        control_size = 8
+        painter.setBrush(QColor(0, 120, 255))
+        painter.setPen(QPen(QColor(255, 255, 255), 1))
+        
+        # 四个角的控制点
+        corners = [
+            self.watermark_bounds.topLeft(),
+            self.watermark_bounds.topRight(),
+            self.watermark_bounds.bottomLeft(),
+            self.watermark_bounds.bottomRight()
+        ]
+        
+        for corner in corners:
+            painter.drawRect(
+                corner.x() - control_size//2,
+                corner.y() - control_size//2,
+                control_size,
+                control_size
+            )
+        
+        # 恢复状态
+        painter.restore()
+     
     def drawTextWatermark(self, painter):
         """绘制文本水印
         
@@ -95,10 +275,7 @@ class WatermarkPreview(QLabel):
             text = self.watermark_settings.get('text', '')
             if not text:
                 return
-            
-            print(f"正在绘制文本水印: {text}")
         except Exception as e:
-            print(f"获取水印文本时出错: {e}")
             return
         
         try:
@@ -106,7 +283,6 @@ class WatermarkPreview(QLabel):
             font = QFont()
             font_settings = self.watermark_settings.get('font', {})
             font_family = font_settings.get('family', 'Arial')
-            print(f"正在设置字体: {font_family}")
             
             # 检查字体是否存在
             font_path = os.path.join(os.environ['WINDIR'], 'Fonts', f'{font_family}.ttf')
@@ -115,14 +291,12 @@ class WatermarkPreview(QLabel):
             
             if not os.path.exists(font_path):
                 # 如果找不到指定字体，使用微软雅黑
-                print(f"找不到字体 {font_family}，使用微软雅黑替代")
                 font.setFamily('Microsoft YaHei')
             else:
                 font.setFamily(font_family)
             
             # 设置字体大小
             font_size = max(1, int(font_settings.get('size', 40) * self.scale_factor))
-            print(f"字体大小: {font_size}")
             font.setPointSize(font_size)
             
             # 设置字体样式
@@ -130,7 +304,6 @@ class WatermarkPreview(QLabel):
             font.setItalic(font_settings.get('italic', False))
             painter.setFont(font)
         except Exception as e:
-            print(f"设置字体时出错: {e}")
             # 使用安全的默认值
             default_font = QFont('Microsoft YaHei', 40)
             painter.setFont(default_font)
@@ -139,7 +312,6 @@ class WatermarkPreview(QLabel):
             # 设置颜色和透明度
             color = self.watermark_settings.get('color', '#000000')
             opacity = self.watermark_settings.get('opacity', 100)
-            print(f"设置颜色: {color}, 透明度: {opacity}%")
             
             if isinstance(color, str):
                 color = QColor(color)
@@ -150,7 +322,6 @@ class WatermarkPreview(QLabel):
             fm = painter.fontMetrics()
             text_width = fm.horizontalAdvance(text)
             text_height = fm.height()
-            print(f"文本尺寸: {text_width}x{text_height}")
             
             # 保存当前状态
             painter.save()
@@ -159,25 +330,22 @@ class WatermarkPreview(QLabel):
             painter.translate(self.watermark_pos)
             rotation = self.watermark_settings.get('rotation', 0)
             if rotation:
-                print(f"旋转角度: {rotation}°")
                 painter.rotate(rotation)
             
             # 绘制文本（考虑中心点偏移）
-            draw_x = -text_width/2
-            draw_y = text_height/2
-            print(f"绘制位置: ({draw_x}, {draw_y})")
+            draw_x = int(-text_width/2)
+            draw_y = int(text_height/2)
             painter.drawText(draw_x, draw_y, text)
             
             # 恢复状态
             painter.restore()
             
         except Exception as e:
-            print(f"绘制文本水印时出错: {e}")
             # 恢复画笔状态
             painter.restore()
             # 使用最基本的绘制方式
             painter.setPen(QColor('#000000'))
-            painter.drawText(self.watermark_pos, text)
+            painter.drawText(int(self.watermark_pos.x()), int(self.watermark_pos.y()), text)
     
     def drawImageWatermark(self, painter):
         """绘制图片水印
@@ -238,10 +406,14 @@ class WatermarkPreview(QLabel):
         
         positions = {
             '左上角': QPoint(padding, padding),
+            '上中': QPoint(width // 2, padding),
             '右上角': QPoint(width - padding, padding),
+            '左中': QPoint(padding, height // 2),
+            '中心': QPoint(width // 2, height // 2),
+            '右中': QPoint(width - padding, height // 2),
             '左下角': QPoint(padding, height - padding),
-            '右下角': QPoint(width - padding, height - padding),
-            '中心': QPoint(width // 2, height // 2)
+            '下中': QPoint(width // 2, height - padding),
+            '右下角': QPoint(width - padding, height - padding)
         }
         
         return positions.get(position, QPoint(width // 2, height // 2))
@@ -249,19 +421,51 @@ class WatermarkPreview(QLabel):
     def mousePressEvent(self, event):
         """鼠标按下事件"""
         if event.button() == Qt.MouseButton.LeftButton:
-            self.dragging = True
-            self.drag_start = event.pos()
-            self.watermark_settings['position_custom'] = True
+            # 检查是否点击在水印区域
+            if self.watermark_bounds.contains(event.pos()):
+                self.dragging = True
+                self.drag_start = event.pos()
+                self.watermark_settings['position_custom'] = True
+                self.setCursor(QCursor(Qt.CursorShape.ClosedHandCursor))
     
     def mouseMoveEvent(self, event):
         """鼠标移动事件"""
         if self.dragging:
-            delta = event.pos() - self.drag_start
-            self.watermark_pos += delta
-            self.drag_start = event.pos()
-            self.updatePreview()
+            # 计算拖拽偏移
+            offset = event.pos() - self.drag_start
+            new_pos = self.watermark_pos + offset
+            
+            # 限制水印在图片范围内
+            if self.pixmap():
+                pixmap_rect = self.pixmap().rect()
+                if pixmap_rect.contains(new_pos):
+                    self.watermark_pos = new_pos
+                    self.drag_start = event.pos()
+                    # 使用轻量级拖动预览
+                    self.updateDragPreview()
+        else:
+            # 检查鼠标是否悬停在水印上
+            old_hover = self.hover_watermark
+            self.hover_watermark = self.watermark_bounds.contains(event.pos())
+            
+            # 更新鼠标样式
+            if self.hover_watermark:
+                self.setCursor(QCursor(Qt.CursorShape.OpenHandCursor))
+            else:
+                self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
+            
+            # 如果悬停状态改变，更新预览
+            if old_hover != self.hover_watermark:
+                self.updatePreview()
     
     def mouseReleaseEvent(self, event):
         """鼠标释放事件"""
-        if event.button() == Qt.MouseButton.LeftButton:
+        if event.button() == Qt.MouseButton.LeftButton and self.dragging:
             self.dragging = False
+            # 恢复鼠标样式
+            if self.hover_watermark:
+                self.setCursor(QCursor(Qt.CursorShape.OpenHandCursor))
+            else:
+                self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
+            # 最终更新预览
+            self.updatePreview()
