@@ -22,6 +22,7 @@ class WatermarkPreview(QLabel):
         self.updating_preview = False  # 防止重复更新的标志
         self.watermark_bounds = QRect()  # 水印边界
         self.hover_watermark = False  # 鼠标是否悬停在水印上
+        self.drag_offset = QPoint()  # 拖拽偏移量
         
         # 启用鼠标跟踪
         self.setMouseTracking(True)
@@ -61,6 +62,7 @@ class WatermarkPreview(QLabel):
                 self.watermark_pos = self.getPresetPosition(self.watermark_settings.get('position', '中心'))
             elif self.watermark_pos == QPoint():
                 self.watermark_pos = self.getPresetPosition('中心')
+            print(f"[DEBUG] 设置图片后的水印位置: {self.watermark_pos}")
         
         self.updatePreview()
     
@@ -98,6 +100,9 @@ class WatermarkPreview(QLabel):
                 Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.SmoothTransformation
             )
+            
+            # 更新缩放比例
+            self.scale_factor = scaled_image.width() / self.original_image.width()
             
             # 创建工作画布，使用缩放后的图片尺寸
             preview = QPixmap(scaled_image.size())
@@ -142,7 +147,10 @@ class WatermarkPreview(QLabel):
             Qt.TransformationMode.SmoothTransformation
         )
         
-        # 创建工作画布
+        # 更新缩放比例
+        self.scale_factor = scaled_image.width() / self.original_image.width()
+        
+        # 创建透明画布
         preview = QPixmap(scaled_image.size())
         preview.fill(Qt.GlobalColor.transparent)
         
@@ -151,7 +159,7 @@ class WatermarkPreview(QLabel):
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         painter.drawPixmap(0, 0, scaled_image)
         
-        # 只绘制当前水印
+        # 绘制当前位置的水印
         if self.watermark_settings.get('type') == '文本水印':
             self.drawTextWatermark(painter)
         else:
@@ -161,6 +169,8 @@ class WatermarkPreview(QLabel):
         self.drawWatermarkBounds(painter)
         
         painter.end()
+        
+        # 更新显示
         self.setPixmap(preview)
         
         # 更新水印边界
@@ -175,6 +185,8 @@ class WatermarkPreview(QLabel):
         """计算水印边界"""
         if not self.watermark_settings:
             return
+        
+        print(f"[DEBUG] 计算水印边界，水印位置: {self.watermark_pos}")
         
         if self.watermark_settings.get('type') == '文本水印':
             text = self.watermark_settings.get('text', '')
@@ -207,6 +219,7 @@ class WatermarkPreview(QLabel):
                 text_width + 2*padding,
                 text_height + 2*padding
             )
+            print(f"[DEBUG] 文本水印边界: {self.watermark_bounds}")
         else:
             # 图片水印边界计算
             image_path = self.watermark_settings.get('image_path')
@@ -223,6 +236,7 @@ class WatermarkPreview(QLabel):
                     scaled_width + 2*padding,
                     scaled_height + 2*padding
                 )
+                print(f"[DEBUG] 图片水印边界: {self.watermark_bounds}")
     
     def drawWatermarkBounds(self, painter):
         """绘制水印边界框"""
@@ -418,49 +432,88 @@ class WatermarkPreview(QLabel):
         
         return positions.get(position, QPoint(width // 2, height // 2))
     
+    def isValidWatermarkPosition(self, pos):
+        """检查水印位置是否有效（在图片边界内）
+        
+        Args:
+            pos: QPoint 水印位置
+            
+        Returns:
+            bool: 位置是否有效
+        """
+        if not self.pixmap():
+            return False
+        
+        pixmap_rect = self.pixmap().rect()
+        print(f"[DEBUG] 图片边界: {pixmap_rect}")
+        
+        # 检查位置是否在图片范围内
+        if pixmap_rect.contains(pos):
+            return True
+        else:
+            return False
+    
     def mousePressEvent(self, event):
         """鼠标按下事件"""
+        print(f"[DEBUG] 鼠标按下: 位置={event.pos()}, 按钮={event.button()}")
+        print(f"[DEBUG] 水印边界: {self.watermark_bounds}")
+        print(f"[DEBUG] 水印位置: {self.watermark_pos}")
+        print(f"[DEBUG] 当前图片尺寸: {self.pixmap().size() if self.pixmap() else 'None'}")
+        
         if event.button() == Qt.MouseButton.LeftButton:
-            # 检查是否点击在水印区域
-            if self.watermark_bounds.contains(event.pos()):
+            # 如果有水印设置，允许在图片任意位置开始拖拽
+            if self.watermark_settings and self.pixmap():
+                print(f"[DEBUG] ✅ 开始自由拖拽水印")
                 self.dragging = True
                 self.drag_start = event.pos()
+                # 计算从点击位置到水印中心的偏移
+                self.drag_offset = self.watermark_pos - event.pos()
                 self.watermark_settings['position_custom'] = True
                 self.setCursor(QCursor(Qt.CursorShape.ClosedHandCursor))
+            else:
+                print(f"[DEBUG] ❌ 没有水印或图片，无法拖拽")
     
     def mouseMoveEvent(self, event):
         """鼠标移动事件"""
+        print(f"[DEBUG] 鼠标移动: 位置={event.pos()}, 拖拽状态={self.dragging}")
+        
         if self.dragging:
-            # 计算拖拽偏移
-            offset = event.pos() - self.drag_start
-            new_pos = self.watermark_pos + offset
+            print(f"[DEBUG] 拖拽中: 当前位置={event.pos()}, 水印位置={self.watermark_pos}")
+            # 使用拖拽偏移计算新的水印位置
+            new_pos = event.pos() + self.drag_offset
+            print(f"[DEBUG] 计算新位置: 鼠标位置={event.pos()}, 偏移={self.drag_offset}, 新位置={new_pos}")
             
-            # 限制水印在图片范围内
-            if self.pixmap():
-                pixmap_rect = self.pixmap().rect()
-                if pixmap_rect.contains(new_pos):
-                    self.watermark_pos = new_pos
-                    self.drag_start = event.pos()
-                    # 使用轻量级拖动预览
-                    self.updateDragPreview()
+            # 检查边界限制
+            if self.isValidWatermarkPosition(new_pos):
+                self.watermark_pos = new_pos
+                print(f"[DEBUG] 更新水印位置: {self.watermark_pos}")
+                # 使用轻量级拖动预览
+                self.updateDragPreview()
+            else:
+                print(f"[DEBUG] 新位置超出边界，忽略移动")
         else:
             # 检查鼠标是否悬停在水印上
             old_hover = self.hover_watermark
             self.hover_watermark = self.watermark_bounds.contains(event.pos())
+            print(f"[DEBUG] 悬停检查: 水印边界={self.watermark_bounds}, 鼠标位置={event.pos()}, 悬停状态={self.hover_watermark}")
             
             # 更新鼠标样式
             if self.hover_watermark:
+                print(f"[DEBUG] 鼠标悬停在水印上")
                 self.setCursor(QCursor(Qt.CursorShape.OpenHandCursor))
             else:
                 self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
             
             # 如果悬停状态改变，更新预览
             if old_hover != self.hover_watermark:
+                print(f"[DEBUG] 悬停状态改变: {old_hover} -> {self.hover_watermark}")
                 self.updatePreview()
     
     def mouseReleaseEvent(self, event):
         """鼠标释放事件"""
+        print(f"[DEBUG] 鼠标释放: 位置={event.pos()}, 拖拽状态={self.dragging}")
         if event.button() == Qt.MouseButton.LeftButton and self.dragging:
+            print(f"[DEBUG] 结束拖拽，最终水印位置: {self.watermark_pos}")
             self.dragging = False
             # 恢复鼠标样式
             if self.hover_watermark:
