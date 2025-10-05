@@ -111,9 +111,13 @@ class WatermarkSettings(QWidget):
         image_select_layout = QHBoxLayout()
         self.image_path_label = QLabel('未选择图片')
         select_image_button = QPushButton('选择图片')
+        self.remove_image_button = QPushButton('删除图片')
+        self.remove_image_button.setEnabled(False)  # 初始状态禁用
         select_image_button.clicked.connect(self.selectWatermarkImage)
+        self.remove_image_button.clicked.connect(self.removeWatermarkImage)
         image_select_layout.addWidget(self.image_path_label)
         image_select_layout.addWidget(select_image_button)
+        image_select_layout.addWidget(self.remove_image_button)
         image_layout.addLayout(image_select_layout)
         
         # 缩放设置
@@ -360,13 +364,21 @@ class WatermarkSettings(QWidget):
     def selectWatermarkImage(self):
         """选择水印图片"""
         file_dialog = QFileDialog()
-        file_dialog.setNameFilter('Images (*.png)')
+        file_dialog.setNameFilter('Images (*.png *.jpg *.jpeg *.bmp *.gif)')
         
         if file_dialog.exec():
             image_path = file_dialog.selectedFiles()[0]
             self.current_settings['image_path'] = image_path
             self.image_path_label.setText(Path(image_path).name)
+            self.remove_image_button.setEnabled(True)  # 启用删除按钮
             self.settingsChanged.emit(self.current_settings)
+            
+    def removeWatermarkImage(self):
+        """删除水印图片"""
+        self.current_settings['image_path'] = ''
+        self.image_path_label.setText('未选择图片')
+        self.remove_image_button.setEnabled(False)  # 禁用删除按钮
+        self.settingsChanged.emit(self.current_settings)
             
     def load_settings(self, settings):
         """从模板加载设置"""
@@ -416,6 +428,10 @@ class WatermarkSettings(QWidget):
             # 图片水印设置
             if 'image_path' in settings and settings['image_path']:
                 self.image_path_label.setText(Path(settings['image_path']).name)
+                self.remove_image_button.setEnabled(True)
+            else:
+                self.image_path_label.setText('未选择图片')
+                self.remove_image_button.setEnabled(False)
                 
             # 发送设置变更信号
             self.settingsChanged.emit(self.current_settings)
