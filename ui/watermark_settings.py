@@ -367,3 +367,58 @@ class WatermarkSettings(QWidget):
             self.current_settings['image_path'] = image_path
             self.image_path_label.setText(Path(image_path).name)
             self.settingsChanged.emit(self.current_settings)
+            
+    def load_settings(self, settings):
+        """从模板加载设置"""
+        try:
+            # 更新当前设置
+            self.current_settings.update(settings)
+            
+            # 更新UI控件
+            if 'watermark_type' in settings:
+                if settings['watermark_type'] == 'text':
+                    self.type_group.button(0).setChecked(True)
+                    self.onTypeChanged(self.type_group.button(0))
+                else:
+                    self.type_group.button(1).setChecked(True)
+                    self.onTypeChanged(self.type_group.button(1))
+                    
+            # 文本设置
+            if 'text' in settings:
+                self.text_edit.setText(settings['text'])
+                
+            if 'font_family' in settings:
+                self.font_combo.setCurrentFont(QFont(settings['font_family']))
+                
+            if 'font_size' in settings:
+                self.size_spin.setValue(settings['font_size'])
+                
+            if 'color' in settings:
+                self.color_button.setStyleSheet(f'background-color: {settings["color"]};')
+                
+            if 'position' in settings:
+                position_map = {
+                    'top_left': '左上角',
+                    'top_center': '顶部居中', 
+                    'top_right': '右上角',
+                    'center_left': '左侧居中',
+                    'center': '中心',
+                    'center_right': '右侧居中',
+                    'bottom_left': '左下角',
+                    'bottom_center': '底部居中',
+                    'bottom_right': '右下角'
+                }
+                position_text = position_map.get(settings['position'], '中心')
+                index = self.position_combo.findText(position_text)
+                if index >= 0:
+                    self.position_combo.setCurrentIndex(index)
+                    
+            # 图片水印设置
+            if 'image_path' in settings and settings['image_path']:
+                self.image_path_label.setText(Path(settings['image_path']).name)
+                
+            # 发送设置变更信号
+            self.settingsChanged.emit(self.current_settings)
+            
+        except Exception as e:
+            print(f"加载设置失败: {e}")
